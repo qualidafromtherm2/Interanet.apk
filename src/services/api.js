@@ -2,9 +2,10 @@ import { Platform } from "react-native";
 import { getToken } from "../lib/storage";
 
 const LOCAL_BASE = Platform.OS === "web" ? "http://localhost:3001" : "http://192.168.1.16:3001";
-const RENDER_URL = "";
-const CANDIDATES = [LOCAL_BASE, RENDER_URL].filter(Boolean);
+const RENDER_URL = "https://interanet-apk.onrender.com";
+const CANDIDATES = [RENDER_URL]; // só HTTPS no APK
 const TIMEOUT_MS = 8000;
+
 
 function fetchWithTimeout(url, options = {}, timeout = TIMEOUT_MS) {
   const controller = new AbortController();
