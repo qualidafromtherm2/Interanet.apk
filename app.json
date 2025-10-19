@@ -16,6 +16,11 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.qualidafromtherm2.loginapp",
+      "versionCode": 1,
+      "permissions": [
+        "INTERNET"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -26,13 +31,19 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-build-properties"
     ],
     "platforms": [
       "ios",
       "android",
       "web"
     ],
-    "sdkVersion": "54.0.0"
+    "sdkVersion": "54.0.0",
+    "extra": {
+      "eas": {
+        "projectId": "a008e885-d5be-469d-8d8c-2e0bd4745063"
+      }
+    }
   }
 }
