@@ -1,0 +1,14 @@
+1) Start usando NPX (mais simples) para subir e gerar o qrcode do Expo
+
+cd ~/loginapp
+npx --yes expo@latest start --tunnel
+
+2) Plano C: CLI global - para abrir o servidor Expo usando a instalação global do Expo CLI
+
+git add -A && cd ~/loginapp/auth-api && npm run dev
+
+3) Abrir no web:
+cd ~/loginapp
+npx expo start --web
+
+

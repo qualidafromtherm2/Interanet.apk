@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: auth-api
+    env: node
+    rootDir: auth-api
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PGSSLMODE
+        value: require
