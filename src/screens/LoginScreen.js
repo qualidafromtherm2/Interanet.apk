@@ -3,7 +3,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
-import { apiLogin } from "../services/api";
+import { apiLogin, apiForgotPassword } from "../services/api";
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -80,6 +80,41 @@ export default function LoginScreen({ onLoggedIn }) {
             style={({pressed})=>[styles.button, !podeEnviar && styles.buttonDisabled, pressed && podeEnviar && styles.buttonPressed]}>
             {loading ? <ActivityIndicator/> : <Text style={styles.buttonText}>Entrar</Text>}
           </Pressable>
+
+          <View style={{flexDirection:'row', justifyContent:'space-between', marginTop:12}}>
+            <Pressable onPress={async ()=>{
+                // pedido simples: pedir ao usuário para inserir email/usuario e chamar API
+                const prompt = async () => {
+                  // Em React Native sem Alert.prompt em Android, usar prompt via prompt-sync não disponível.
+                  // Usaremos um prompt simples com Alert e TextInput via modal seria ideal; aqui usamos prompt via window.prompt quando web, ou fallback para Alert e usar campo existente.
+                  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.prompt) {
+                    const val = window.prompt('Informe seu e-mail ou usuário para redefinir a senha:');
+                    return val;
+                  }
+                  // Fallback: usar Alert para informar que deve inserir o usuário no campo acima e tocar novamente
+                  Alert.alert('Esqueci a senha', 'Insira seu e-mail ou usuário no campo "Usuário ou e-mail" e toque em "Enviar solicitação".', [{ text: 'OK' }]);
+                  return null;
+                };
+                const val = await prompt();
+                if (!val) return;
+                try{
+                  setLoading(true);
+                  await apiForgotPassword(val.trim());
+                  Alert.alert('Solicitação enviada', 'Se o e-mail/usuário existir, você receberá instruções por e-mail.');
+                }catch(e){
+                  Alert.alert('Erro', e.message || 'Falha ao enviar solicitação');
+                }finally{ setLoading(false); }
+              }} style={{padding:8}}>
+              <Text style={{color:'#93C5FD', fontWeight:'600'}}>Esqueci a senha</Text>
+            </Pressable>
+
+            <Pressable onPress={()=>{
+                // botão criado sem funcionalidade por enquanto
+                Alert.alert('Solicitação de cadastro', 'Funcionalidade não implementada ainda.');
+              }} style={{padding:8}}>
+              <Text style={{color:'#93C5FD', fontWeight:'600'}}>Solicitação de cadastro</Text>
+            </Pressable>
+          </View>
 
           <Text style={styles.hint}>* Use seu username do sistema e a senha.</Text>
         </View>

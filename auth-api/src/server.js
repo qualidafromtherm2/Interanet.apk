@@ -56,6 +56,62 @@ app.post("/auth/login", async (req, res) => {
     console.error("Erro /auth/login:", err); return res.status(500).json({ error: "Erro interno." });
   }
 });
+// Rota para solicitar reset de senha (esqueci a senha)
+app.post("/auth/forgot-password", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const identifier = (body.email || body.username || "").trim();
+    if (!identifier) return res.status(400).json({ error: "Informe e-mail ou usuário." });
+
+    // Tentar achar pelo e-mail primeiro, depois por username
+    const { rows: byEmail } = await pool.query(`SELECT id, username, email FROM public.auth_user WHERE email = $1 LIMIT 1`, [identifier]);
+    let user = byEmail[0];
+    if (!user) {
+      const { rows: byUser } = await pool.query(`SELECT id, username, email FROM public.auth_user WHERE username = $1 LIMIT 1`, [identifier]);
+      user = byUser[0];
+    }
+    // Para não vazar informação, sempre retornar 200 com mensagem genérica
+    if (!user) return res.json({ ok: true, message: "Se o email/usuário existir, você receberá instruções por e-mail." });
+
+    // Gerar um token de uso único para reset (curto prazo)
+    const resetToken = jwt.sign({ sub: String(user.id), t: Date.now() }, process.env.JWT_SECRET, { expiresIn: process.env.RESET_TTL || '1h' });
+    const resetUrlBase = process.env.RESET_URL_BASE || null; // ex: https://meusite.com/reset-password
+    const resetLink = resetUrlBase ? `${resetUrlBase}?token=${resetToken}` : `TOKEN:${resetToken}`;
+
+    // Tentar enviar e-mail se configurado
+    let emailSent = false;
+    try {
+      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        // import dynamic para evitar erro se nodemailer não estiver instalado
+        const nodemailer = await import('nodemailer');
+        const transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: Number(process.env.SMTP_PORT || 587),
+          secure: (process.env.SMTP_SECURE === 'true'),
+          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+        });
+        const from = process.env.FROM_EMAIL || process.env.SMTP_USER;
+        const info = await transporter.sendMail({
+          from,
+          to: user.email || process.env.FROM_EMAIL,
+          subject: 'Solicitação de redefinição de senha',
+          text: `Olá ${user.username},\n\nRecebemos uma solicitação para redefinir sua senha. Acesse o link abaixo para continuar:\n\n${resetLink}\n\nSe você não solicitou, ignore esta mensagem.`,
+        });
+        console.log('Forgot-password email sent:', info && info.messageId);
+        emailSent = true;
+      } else {
+        console.log('RESET TOKEN (no SMTP configured):', resetLink, 'for user', user.username, user.email);
+      }
+    } catch (e) {
+      console.error('Erro ao enviar email de reset:', e);
+    }
+
+    return res.json({ ok: true, message: 'Se o email/usuário existir, você receberá instruções por e-mail.' });
+  } catch (e) {
+    console.error('Erro /auth/forgot-password:', e);
+    return res.status(500).json({ error: 'Erro interno.' });
+  }
+});
 app.get("/auth/me", requireAuth, async (req, res) => { res.json({ ok: true, user: req.user }); });
 app.get("/user/profile", requireAuth, async (req, res) => {
   const userId = req.user?.sub;

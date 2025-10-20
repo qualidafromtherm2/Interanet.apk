@@ -36,6 +36,14 @@ export async function apiLogin(username, password) {
   });
 }
 
+export async function apiForgotPassword(identifier) {
+  return tryEndpoints("/auth/forgot-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: identifier, username: identifier }),
+  });
+}
+
 export async function apiGetProfile() {
   const token = await getToken();
   return tryEndpoints("/user/profile", {

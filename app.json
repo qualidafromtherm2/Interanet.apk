@@ -1,35 +1,38 @@
 {
   "expo": {
-    "name": "loginapp",
+    "name": "Fromtherm",
     "slug": "loginapp",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "icon": "./assets/icon.png",
+
+    "icon": "./assets/fromtherm-icon.png",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+
     "ios": {
       "supportsTablet": true
     },
+
     "android": {
       "package": "com.qualidafromtherm2.loginapp",
-      "versionCode": 1,
-      "permissions": [
-        "INTERNET"
-      ],
+      "versionCode": 2,
+      "permissions": ["INTERNET"],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/fromtherm-adaptive-foreground.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true
     },
+
     "web": {
       "favicon": "./assets/favicon.png"
     },
+
     "plugins": [
       [
         "expo-build-properties",
@@ -37,16 +40,13 @@
           "android": {
             "kotlinVersion": "2.0.20"
           }
-        }
+        }   
       ],
       "expo-secure-store",
       "expo-font"
     ],
-    "platforms": [
-      "ios",
-      "android",
-      "web"
-    ],
+
+    "platforms": ["ios", "android", "web"],
     "sdkVersion": "54.0.0",
     "extra": {
       "eas": {
