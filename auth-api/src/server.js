@@ -15,6 +15,23 @@ const pool = new pg.Pool({
   ssl: process.env.PGSSLMODE ? { rejectUnauthorized: false } : undefined,
 });
 
+// Garantir tabela para armazenar códigos de reset
+(async function ensureResetTable(){
+  try{
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS public.auth_password_reset (
+        id serial PRIMARY KEY,
+        user_id bigint NOT NULL REFERENCES public.auth_user(id) ON DELETE CASCADE,
+        code varchar(6) NOT NULL,
+        created_at timestamptz DEFAULT now(),
+        expires_at timestamptz NOT NULL,
+        used boolean DEFAULT false
+      );
+    `);
+    console.log('auth_password_reset table ensured');
+  }catch(e){ console.error('Erro criando auth_password_reset table:', e); }
+})();
+
 const JWT_TTL = "8h";
 function signJwt(payload) {
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: JWT_TTL });
@@ -73,16 +90,18 @@ app.post("/auth/forgot-password", async (req, res) => {
     // Para não vazar informação, sempre retornar 200 com mensagem genérica
     if (!user) return res.json({ ok: true, message: "Se o email/usuário existir, você receberá instruções por e-mail." });
 
-    // Gerar um token de uso único para reset (curto prazo)
-    const resetToken = jwt.sign({ sub: String(user.id), t: Date.now() }, process.env.JWT_SECRET, { expiresIn: process.env.RESET_TTL || '1h' });
-    const resetUrlBase = process.env.RESET_URL_BASE || null; // ex: https://meusite.com/reset-password
-    const resetLink = resetUrlBase ? `${resetUrlBase}?token=${resetToken}` : `TOKEN:${resetToken}`;
+    // Gerar código numérico de 6 dígitos
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + (Number(process.env.RESET_CODE_TTL_MINUTES || 15) * 60 * 1000));
+    try {
+      await pool.query(`INSERT INTO public.auth_password_reset (user_id, code, expires_at) VALUES ($1,$2,$3)`, [user.id, code, expiresAt.toISOString()]);
+    } catch(e){ console.error('Erro ao salvar reset code:', e); }
+
+    const messageText = `Olá ${user.username},\n\nRecebemos uma solicitação para redefinir sua senha. Use o código de 6 dígitos abaixo no aplicativo:\n\n${code}\n\nEste código expira em ${process.env.RESET_CODE_TTL_MINUTES || 15} minutos. Se você não solicitou, ignore.`;
 
     // Tentar enviar e-mail se configurado
-    let emailSent = false;
     try {
       if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-        // import dynamic para evitar erro se nodemailer não estiver instalado
         const nodemailer = await import('nodemailer');
         const transporter = nodemailer.createTransport({
           host: process.env.SMTP_HOST,
@@ -94,23 +113,58 @@ app.post("/auth/forgot-password", async (req, res) => {
         const info = await transporter.sendMail({
           from,
           to: user.email || process.env.FROM_EMAIL,
-          subject: 'Solicitação de redefinição de senha',
-          text: `Olá ${user.username},\n\nRecebemos uma solicitação para redefinir sua senha. Acesse o link abaixo para continuar:\n\n${resetLink}\n\nSe você não solicitou, ignore esta mensagem.`,
+          subject: 'Código para redefinição de senha',
+          text: messageText,
         });
         console.log('Forgot-password email sent:', info && info.messageId);
-        emailSent = true;
       } else {
-        console.log('RESET TOKEN (no SMTP configured):', resetLink, 'for user', user.username, user.email);
+        console.log('RESET CODE (no SMTP configured):', code, 'for user', user.username, user.email);
       }
     } catch (e) {
       console.error('Erro ao enviar email de reset:', e);
     }
 
-    return res.json({ ok: true, message: 'Se o email/usuário existir, você receberá instruções por e-mail.' });
+    return res.json({ ok: true, message: 'Se o email/usuário existir, você receberá instruções por e-mail com o código.' });
   } catch (e) {
     console.error('Erro /auth/forgot-password:', e);
     return res.status(500).json({ error: 'Erro interno.' });
   }
+});
+
+// Verificar código de reset
+app.post('/auth/verify-reset-code', async (req, res) => {
+  try{
+    const schema = z.object({ username: z.string().min(3), code: z.string().length(6) });
+    const { username, code } = schema.parse(req.body);
+    const { rows: users } = await pool.query(`SELECT id FROM public.auth_user WHERE username = $1 LIMIT 1`, [username]);
+    const user = users[0]; if (!user) return res.status(400).json({ error: 'Usuário inválido.' });
+    const { rows } = await pool.query(`SELECT id FROM public.auth_password_reset WHERE user_id = $1 AND code = $2 AND used = false AND expires_at > now() ORDER BY created_at DESC LIMIT 1`, [user.id, code]);
+    if (!rows[0]) return res.status(400).json({ error: 'Código inválido ou expirado.' });
+    return res.json({ ok: true });
+  }catch(e){ if (e instanceof z.ZodError) return res.status(400).json({ error: 'Dados inválidos.' }); console.error('Erro /auth/verify-reset-code:', e); return res.status(500).json({ error:'Erro interno.'}); }
+});
+
+// Resetar senha usando código
+app.post('/auth/reset-password', async (req, res) => {
+  try{
+    const schema = z.object({ username: z.string().min(3), code: z.string().length(6), newPassword: z.string().min(6) });
+    const { username, code, newPassword } = schema.parse(req.body);
+    const client = await pool.connect();
+    try{
+      await client.query('BEGIN');
+      const { rows: users } = await client.query(`SELECT id FROM public.auth_user WHERE username = $1 LIMIT 1`, [username]);
+      const user = users[0]; if (!user) { await client.query('ROLLBACK'); return res.status(400).json({ error:'Usuário inválido.' }); }
+      const { rows } = await client.query(`SELECT id FROM public.auth_password_reset WHERE user_id = $1 AND code = $2 AND used = false AND expires_at > now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, [user.id, code]);
+      const row = rows[0]; if (!row) { await client.query('ROLLBACK'); return res.status(400).json({ error:'Código inválido ou expirado.' }); }
+      // Atualizar senha
+      await client.query(`UPDATE public.auth_user SET password_hash = crypt($1, gen_salt('bf')) WHERE id = $2`, [newPassword, user.id]);
+      // Marcar código como usado
+      await client.query(`UPDATE public.auth_password_reset SET used = true WHERE id = $1`, [row.id]);
+      await client.query('COMMIT');
+      return res.json({ ok: true, message: 'Senha redefinida com sucesso.' });
+    }catch(e){ await client.query('ROLLBACK'); console.error('Erro reset-password transaction:', e); return res.status(500).json({ error:'Erro interno.' }); }
+    finally{ client.release(); }
+  }catch(e){ if (e instanceof z.ZodError) return res.status(400).json({ error: 'Dados inválidos.' }); console.error('Erro /auth/reset-password:', e); return res.status(500).json({ error:'Erro interno.'}); }
 });
 app.get("/auth/me", requireAuth, async (req, res) => { res.json({ ok: true, user: req.user }); });
 app.get("/user/profile", requireAuth, async (req, res) => {

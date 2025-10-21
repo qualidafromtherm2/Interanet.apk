@@ -44,6 +44,22 @@ export async function apiForgotPassword(identifier) {
   });
 }
 
+export async function apiVerifyResetCode(username, code) {
+  return tryEndpoints('/auth/verify-reset-code', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, code }),
+  });
+}
+
+export async function apiResetPassword(username, code, newPassword) {
+  return tryEndpoints('/auth/reset-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, code, newPassword }),
+  });
+}
+
 export async function apiGetProfile() {
   const token = await getToken();
   return tryEndpoints("/user/profile", {

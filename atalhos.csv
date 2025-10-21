@@ -8,7 +8,13 @@ npx --yes expo@latest start --tunnel
 git add -A && cd ~/loginapp/auth-api && npm run dev
 
 3) Abrir no web:
-cd ~/loginapp
 npx expo start --web
 
+4) Build Android APK com EAS (Expo Application Services)
+git add app.json assets/fromtherm-*.png
+git commit -m "branding: Fromtherm + ícones"
+git push
+eas build -p android --profile apk
 
+5) senha do app: 
+nkpr uekd pncd fluc
