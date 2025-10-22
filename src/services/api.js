@@ -111,3 +111,15 @@ export async function apiBuscarCodigo(term, limit) {
   console.log("[apiBuscarCodigo] ✅ retorno", data);
   return data;
 }
+
+export async function apiListaPecas(ordem) {
+  const token = await getToken();
+  const codigo = encodeURIComponent(ordem ?? "");
+  const path = `/user/lista-pecas?ordem=${codigo}`;
+  console.log("[apiListaPecas] ▶️ buscando peças", { ordem, path });
+  const data = await tryEndpoints(path, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  console.log("[apiListaPecas] ✅ retorno", data);
+  return data;
+}

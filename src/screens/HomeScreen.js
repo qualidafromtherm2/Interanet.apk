@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator, Alert, ScrollView, TextInput, Image } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator, Alert, ScrollView, TextInput, Image, BackHandler } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { apiGetProfile, apiGetOperacoes, apiBuscarCodigo } from "../services/api";
+import { apiGetProfile, apiBuscarCodigo, apiListaPecas } from "../services/api";
 
 const TABLE_LABELS = {
   historico_op_glide: "Histórico OP Glide",
@@ -60,33 +60,32 @@ function formatFieldValue(key, value) {
   return String(normalized);
 }
 
+function formatQuantidade(valor) {
+  if (valor === null || valor === undefined) return "-";
+  const numero = Number(valor);
+  if (Number.isNaN(numero)) return String(valor);
+  return numero.toLocaleString("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4,
+  });
+}
+
 export default function HomeScreen({ onLogout }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [perfilOpen, setPerfilOpen] = useState(false);
   const [loadingPerfil, setLoadingPerfil] = useState(false);
   const [perfil, setPerfil] = useState(null);
 
-  const [opsLoading, setOpsLoading] = useState(true);
-  const [ops, setOps] = useState([]);
   const [codigoManual, setCodigoManual] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
   const [ultimaBusca, setUltimaBusca] = useState("");
-
-  useEffect(() => {
-    (async () => {
-      try {
-        setOpsLoading(true);
-        const list = await apiGetOperacoes();
-        setOps(Array.isArray(list) ? list : []);
-      } catch (e) {
-        Alert.alert("Erro", e.message || "Falha ao carregar operações");
-        setOps([]);
-      } finally {
-        setOpsLoading(false);
-      }
-    })();
-  }, []);
+  const [pecasVisible, setPecasVisible] = useState(false);
+  const [pecasLoading, setPecasLoading] = useState(false);
+  const [pecasData, setPecasData] = useState(null);
+  const [pecasErro, setPecasErro] = useState("");
+  const [pecasOrdem, setPecasOrdem] = useState("");
+  const [pecaDetalhe, setPecaDetalhe] = useState(null);
 
   function toggleMenu(){ setMenuOpen(v=>!v); }
   async function handlePerfil(){
@@ -127,6 +126,97 @@ export default function HomeScreen({ onLogout }) {
       return;
     }
     await executarBusca(valor);
+  }
+
+  const closePecas = useCallback(() => {
+    setPecasVisible(false);
+    setPecasData(null);
+    setPecasErro("");
+    setPecasOrdem("");
+    setPecasLoading(false);
+    setPecaDetalhe(null);
+  }, []);
+
+  useEffect(() => {
+    if (!pecasVisible) return;
+    const onBackPress = () => {
+      if (pecaDetalhe) {
+        setPecaDetalhe(null);
+        return true;
+      }
+      closePecas();
+      return true;
+    };
+    const subscription = BackHandler?.addEventListener?.("hardwareBackPress", onBackPress);
+    const handleKeyDown = (event) => {
+      if (event?.key === "Escape") {
+        event.preventDefault();
+        if (pecaDetalhe) {
+          setPecaDetalhe(null);
+        } else {
+          closePecas();
+        }
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("keydown", handleKeyDown);
+    }
+    return () => {
+      subscription?.remove?.();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("keydown", handleKeyDown);
+      }
+    };
+  }, [pecasVisible, closePecas, pecaDetalhe]);
+
+  async function handleListaPecas(item, detalheObj){
+    let detalhes = detalheObj;
+    if (!detalhes || typeof detalhes !== "object") {
+      if (typeof item?.detalhes === "string") {
+        try { detalhes = JSON.parse(item.detalhes); }
+        catch (e) { detalhes = {}; }
+      } else if (item?.detalhes && typeof item.detalhes === "object") {
+        detalhes = item.detalhes;
+      } else {
+        detalhes = {};
+      }
+    }
+
+    const ordem = String(
+      detalhes?.ordem_de_producao ??
+      (item?.coluna === "ordem_de_producao" ? item.valor : "") ??
+      ""
+    ).trim();
+
+    if (!ordem) {
+      Alert.alert("Sem ordem", "Não foi possível identificar a ordem de produção para este registro.");
+      return;
+    }
+
+    setPecasVisible(true);
+    setPecasLoading(true);
+    setPecasErro("");
+    setPecasData(null);
+    setPecasOrdem(ordem);
+
+    try {
+      const data = await apiListaPecas(ordem);
+      if (data && typeof data === "object") {
+        setPecasData(data);
+        if (!Array.isArray(data.fichas) || data.fichas.length === 0) {
+          setPecasErro("Nenhuma peça encontrada para esta OP.");
+        }
+      } else {
+        setPecasErro("Resposta inesperada do servidor.");
+      }
+    } catch (e) {
+      console.error("[HomeScreen] erro lista de peças", e);
+      const message = e?.message || e?.data?.error || "Falha ao carregar lista de peças.";
+      setPecasErro(message);
+      Alert.alert("Erro", message);
+    } finally {
+      setPecasLoading(false);
+    }
   }
 
   return (
@@ -203,6 +293,11 @@ export default function HomeScreen({ onLogout }) {
                       return { key, label, value: formatted };
                     })
                     .filter(Boolean);
+                  const ordemRef = String(
+                    detalhes?.ordem_de_producao ??
+                    (item?.coluna === "ordem_de_producao" ? item.valor : "") ??
+                    ""
+                  ).trim();
 
                   return (
                     <View key={`${item.tabela}-${item.coluna}-${item.valor}-${idx}`} style={styles.resultCard}>
@@ -227,6 +322,11 @@ export default function HomeScreen({ onLogout }) {
                       ) : (
                         <Text style={styles.detailEmpty}>Sem detalhes adicionais.</Text>
                       )}
+                      {ordemRef ? (
+                        <Pressable style={styles.piecesButton} onPress={() => handleListaPecas(item, detalhes)}>
+                          <Text style={styles.piecesButtonText}>Lista de peças</Text>
+                        </Pressable>
+                      ) : null}
                     </View>
                   );
                 })}
@@ -237,31 +337,6 @@ export default function HomeScreen({ onLogout }) {
               <Text style={styles.resultHint}>Digite um código para buscar nos históricos.</Text>
             )}
           </View>
-
-          {opsLoading ? (
-            <View style={styles.centerInside}><ActivityIndicator /><Text style={styles.muted}>Carregando operações…</Text></View>
-          ) : ops.length > 0 ? (
-            <View style={styles.sugestoesBox}>
-              <Text style={styles.sectionTitle}>Operações atribuídas</Text>
-              <ScrollView contentContainerStyle={styles.tagsContainer} horizontal={false} nestedScrollEnabled>
-                {ops.map(op => (
-                  <Pressable
-                    key={String(op)}
-                    style={({ pressed }) => [styles.tag, pressed && styles.tagPressed]}
-                    onPress={() => {
-                      const valor = String(op || "").trim();
-                      setCodigoManual(valor);
-                      if (valor) executarBusca(valor);
-                    }}
-                  >
-                    <Text style={styles.tagTxt}>{op}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
-            </View>
-          ) : (
-            <Text style={[styles.muted, { marginTop:12 }]}>Sem operações atribuídas.</Text>
-          )}
         </View>
       </View>
 
@@ -282,6 +357,110 @@ export default function HomeScreen({ onLogout }) {
           <Pressable style={styles.closeBtn} onPress={()=>setPerfilOpen(false)}><Text style={styles.closeTxt}>Fechar</Text></Pressable>
         </View>
       </Modal>
+
+      {pecasVisible && (
+        <View style={styles.piecesPortal} pointerEvents="box-none">
+          <Pressable style={styles.piecesScrim} onPress={closePecas} />
+          <View style={styles.piecesCard}>
+            <View style={styles.piecesHeader}>
+              <Text style={styles.piecesTitle}>Lista de peças • OP {pecasOrdem || pecasData?.ordem || ""}</Text>
+              <Pressable onPress={closePecas} style={styles.piecesClose} hitSlop={10}>
+                <Ionicons name="close" size={20} color="#F9FAFB" />
+              </Pressable>
+            </View>
+            {pecasLoading ? (
+              <View style={styles.centerInside}><ActivityIndicator /><Text style={styles.muted}>Carregando peças…</Text></View>
+            ) : pecasErro ? (
+              <View style={styles.centerInside}><Text style={styles.piecesEmpty}>{pecasErro}</Text></View>
+            ) : Array.isArray(pecasData?.fichas) && pecasData.fichas.length ? (
+              <ScrollView style={styles.piecesScroll} contentContainerStyle={styles.piecesContainer} nestedScrollEnabled>
+                {pecasData.fichas.map((ficha, fichaIdx) => (
+                  <View key={`${ficha.identificacao_da_ficha_tecnica || "ficha"}-${fichaIdx}`} style={styles.piecesFicha}>
+                    <Text style={styles.piecesFichaTitle}>Ficha técnica {ficha.identificacao_da_ficha_tecnica || "—"}</Text>
+                    <Text style={styles.piecesFichaMeta}>
+                      Produto: {ficha?.identificacao?.identificacao_do_produto || "—"}
+                      {" • "}
+                      {ficha?.identificacao?.descricao_do_produto || "Sem descrição"}
+                    </Text>
+                    {Array.isArray(ficha.operacoes) && ficha.operacoes.length ? (
+                      ficha.operacoes.map((operacao, opIdx) => (
+                        <View key={`${ficha.identificacao_da_ficha_tecnica || "ficha"}-${opIdx}`} style={styles.piecesGroup}>
+                          <Text style={styles.piecesGroupTitle}>{operacao.descricao_da_operacao || "Operação sem descrição"}</Text>
+                          {Array.isArray(operacao.itens) && operacao.itens.length ? (
+                            <View style={styles.piecesItemsList}>
+                              {operacao.itens.map((peca, linhaIdx) => (
+                                <Pressable
+                                  key={`${operacao.descricao_da_operacao || opIdx}-${peca.identificacao_do_produto_consumido || linhaIdx}`}
+                                  style={({ pressed }) => [
+                                    styles.pieceItem,
+                                    pressed && styles.pieceItemPressed,
+                                  ]}
+                                  onPress={() => setPecaDetalhe({
+                                    identificacao: peca.identificacao_do_produto_consumido || "-",
+                                    descricao: peca.descricao_do_produto_consumido || "Sem descrição disponível.",
+                                    quantidade: formatQuantidade(peca.quantidade_prevista_de_consumo),
+                                    operacao: operacao.descricao_da_operacao || "Operação",
+                                    ficha: ficha.identificacao_da_ficha_tecnica || "—",
+                                  })}
+                                >
+                                  <View style={styles.pieceField}>
+                                    <Text style={styles.pieceFieldLabel}>Identificação</Text>
+                                    <Text style={styles.pieceFieldValue} numberOfLines={2}>
+                                      {peca.identificacao_do_produto_consumido || "-"}
+                                    </Text>
+                                  </View>
+                                  <View style={styles.pieceField}>
+                                    <Text style={styles.pieceFieldLabel}>Descrição</Text>
+                                    <Text style={styles.pieceFieldValue} numberOfLines={3}>
+                                      {peca.descricao_do_produto_consumido || "-"}
+                                    </Text>
+                                  </View>
+                                  <View style={[styles.pieceField, styles.pieceFieldQtd]}>
+                                    <Text style={styles.pieceFieldLabel}>Qtd. prevista</Text>
+                                    <Text style={styles.pieceFieldValue}>{formatQuantidade(peca.quantidade_prevista_de_consumo)}</Text>
+                                  </View>
+                                </Pressable>
+                              ))}
+                            </View>
+                          ) : (
+                            <Text style={styles.piecesEmpty}>Sem itens para esta operação.</Text>
+                          )}
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.piecesEmpty}>Nenhuma operação encontrada.</Text>
+                    )}
+                  </View>
+                ))}
+              </ScrollView>
+            ) : (
+              <View style={styles.centerInside}><Text style={styles.piecesEmpty}>Nenhuma peça encontrada.</Text></View>
+            )}
+          </View>
+          {pecaDetalhe && (
+            <View style={styles.pieceDetailPortal} pointerEvents="box-none">
+              <Pressable style={styles.pieceDetailScrim} onPress={() => setPecaDetalhe(null)} />
+              <View style={styles.pieceDetailCard}>
+                <View style={styles.pieceDetailHeader}>
+                  <View style={{ flexShrink:1, paddingRight:12 }}>
+                    <Text style={styles.pieceDetailTitle}>{pecaDetalhe.identificacao}</Text>
+                    <Text style={styles.pieceDetailMeta}>Ficha {pecaDetalhe.ficha} • {pecaDetalhe.operacao}</Text>
+                  </View>
+                  <Pressable onPress={() => setPecaDetalhe(null)} style={styles.pieceDetailClose} hitSlop={10}>
+                    <Ionicons name="close" size={18} color="#0F172A" />
+                  </Pressable>
+                </View>
+                <ScrollView style={styles.pieceDetailScroll}>
+                  <Text style={styles.pieceDetailLabel}>Descrição completa</Text>
+                  <Text style={styles.pieceDetailDescription}>{pecaDetalhe.descricao}</Text>
+                  <Text style={[styles.pieceDetailLabel, { marginTop:16 }]}>Quantidade prevista</Text>
+                  <Text style={styles.pieceDetailDescription}>{pecaDetalhe.quantidade}</Text>
+                </ScrollView>
+              </View>
+            </View>
+          )}
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -305,31 +484,59 @@ const styles = StyleSheet.create({
   submitBtn:{ marginTop:12, backgroundColor:"#2563EB", borderRadius:12, paddingVertical:14, alignItems:"center", borderWidth:1, borderColor:"#1E40AF" },
   submitBtnDisabled:{ opacity:0.7 },
   submitTxt:{ color:"#F9FAFB", fontWeight:"700", fontSize:16 },
-  resultsSection:{ marginTop:20, flex:1 },
+  resultsSection:{ marginTop:20, flex:1, alignSelf:"stretch" },
   sectionTitle:{ color:"#F9FAFB", fontWeight:"600", marginBottom:8, fontSize:16 },
-  resultsScroll:{ maxHeight:200, borderWidth:1, borderColor:"#1F2937", borderRadius:12, backgroundColor:"#0B1220" },
-  resultsContainer:{ padding:12, gap:12 },
-  resultCard:{ backgroundColor:"#111827", borderWidth:1, borderColor:"#1F2937", borderRadius:12, padding:12, gap:8 },
+  resultsScroll:{ flex:1, borderWidth:1, borderColor:"#1F2937", borderRadius:12, backgroundColor:"#0B1220" },
+  resultsContainer:{ padding:16, gap:16 },
+  resultCard:{ backgroundColor:"#111827", borderWidth:1, borderColor:"#1F2937", borderRadius:16, padding:18, gap:16, shadowColor:"#000", shadowOpacity:0.35, shadowRadius:12, shadowOffset:{ width:0, height:6 }, elevation:6 },
   resultValor:{ color:"#F9FAFB", fontSize:16, fontWeight:"700" },
   resultMeta:{ color:"#93C5FD", marginTop:4, fontSize:13 },
   resultImage:{ width:"100%", height:160, borderRadius:12, backgroundColor:"#0B1220" },
-  detailList:{ gap:6 },
-  detailRow:{ flexDirection:"row", gap:6, alignItems:"flex-start" },
-  detailLabel:{ color:"#D1D5DB", fontWeight:"600", fontSize:13, minWidth:110 },
-  detailValue:{ color:"#F3F4F6", fontSize:13, flexShrink:1 },
+  detailList:{ gap:12 },
+  detailRow:{ backgroundColor:"#0B1220", borderRadius:12, padding:12, borderWidth:1, borderColor:"#1F2937" },
+  detailLabel:{ color:"#94A3B8", fontWeight:"600", fontSize:12, textTransform:"uppercase", letterSpacing:0.5 },
+  detailValue:{ color:"#F9FAFB", fontSize:14, marginTop:4, lineHeight:20 },
   detailEmpty:{ color:"#9CA3AF", fontSize:13 },
+  piecesButton:{ marginTop:14, alignSelf:"flex-start", backgroundColor:"#10B981", borderRadius:10, paddingHorizontal:16, paddingVertical:10, borderWidth:1, borderColor:"#047857" },
+  piecesButtonText:{ color:"#ECFDF5", fontWeight:"700", fontSize:14 },
   resultHint:{ color:"#9CA3AF" },
   resultEmpty:{ color:"#FCD34D" },
   centerInside:{ marginTop:16, alignItems:"center" },
-  sugestoesBox:{ marginTop:16, flex:1 },
-  tagsContainer:{ flexDirection:"row", flexWrap:"wrap", gap:8 },
-  tag:{ backgroundColor:"#1D4ED8", borderRadius:10, paddingVertical:6, paddingHorizontal:10, borderWidth:1, borderColor:"#1E40AF" },
-  tagPressed:{ opacity:0.8 },
-  tagTxt:{ color:"#E0F2FE", fontWeight:"600" },
   modalOverlay:{ ...StyleSheet.absoluteFillObject, backgroundColor:"rgba(0,0,0,0.45)" },
   modalCard:{ position:"absolute", left:20, right:20, top:"25%", backgroundColor:"#111827", borderWidth:1, borderColor:"#1F2937", borderRadius:16, padding:16 },
   modalTitle:{ color:"#F9FAFB", fontSize:18, fontWeight:"700", marginBottom:8 },
   modalLine:{ color:"#E5E7EB", marginTop:6 },
   closeBtn:{ marginTop:14, backgroundColor:"#374151", borderRadius:10, paddingVertical:10, alignItems:"center" },
   closeTxt:{ color:"#F9FAFB", fontWeight:"700" },
+  piecesPortal:{ ...StyleSheet.absoluteFillObject, zIndex:30, justifyContent:"center", alignItems:"center", padding:20 },
+  piecesScrim:{ ...StyleSheet.absoluteFillObject, backgroundColor:"rgba(15,23,42,0.85)" },
+  piecesCard:{ width:"100%", maxWidth:960, maxHeight:"90%", backgroundColor:"#0B1220", borderRadius:18, borderWidth:1, borderColor:"#1F2937", padding:16, zIndex:31, shadowColor:"#000", shadowOpacity:0.4, shadowRadius:12, shadowOffset:{ width:0, height:6 }, elevation:8 },
+  piecesHeader:{ flexDirection:"row", alignItems:"center", justifyContent:"space-between", marginBottom:12 },
+  piecesTitle:{ color:"#F9FAFB", fontSize:18, fontWeight:"700", flexShrink:1, paddingRight:12 },
+  piecesClose:{ width:32, height:32, borderRadius:16, alignItems:"center", justifyContent:"center", backgroundColor:"#1F2937", borderWidth:1, borderColor:"#374151" },
+  piecesScroll:{ maxHeight:480, borderRadius:12, width:"100%" },
+  piecesContainer:{ paddingBottom:24, gap:20, paddingHorizontal:4 },
+  piecesFicha:{ borderWidth:1, borderColor:"#1F2937", borderRadius:16, padding:16, backgroundColor:"#111827", gap:16 },
+  piecesFichaTitle:{ color:"#F9FAFB", fontWeight:"700", fontSize:16 },
+  piecesFichaMeta:{ color:"#CBD5F5", fontSize:13, lineHeight:18 },
+  piecesGroup:{ gap:12, borderWidth:1, borderColor:"#1F2937", borderRadius:14, padding:14, backgroundColor:"#0F172A" },
+  piecesGroupTitle:{ color:"#93C5FD", fontWeight:"700", fontSize:14, textTransform:"uppercase", letterSpacing:0.6 },
+  piecesItemsList:{ gap:12 },
+  pieceItem:{ borderWidth:1, borderColor:"#1F2937", borderRadius:12, padding:12, backgroundColor:"#111C34", gap:10 },
+  pieceItemPressed:{ backgroundColor:"#1A2440" },
+  pieceField:{ gap:4 },
+  pieceFieldLabel:{ color:"#94A3B8", fontSize:11, letterSpacing:0.4, textTransform:"uppercase" },
+  pieceFieldValue:{ color:"#F8FAFC", fontSize:14, lineHeight:20 },
+  pieceFieldQtd:{ alignItems:"flex-end" },
+  piecesEmpty:{ color:"#9CA3AF", fontSize:13, marginTop:8 },
+  pieceDetailPortal:{ ...StyleSheet.absoluteFillObject, justifyContent:"flex-end", padding:20, zIndex:50 },
+  pieceDetailScrim:{ ...StyleSheet.absoluteFillObject, backgroundColor:"rgba(15,23,42,0.65)" },
+  pieceDetailCard:{ backgroundColor:"#E2E8F0", borderRadius:20, padding:18, maxHeight:"70%", shadowColor:"#000", shadowOpacity:0.35, shadowRadius:18, shadowOffset:{ width:0, height:10 }, elevation:12 },
+  pieceDetailHeader:{ flexDirection:"row", alignItems:"center", justifyContent:"space-between", marginBottom:12 },
+  pieceDetailTitle:{ color:"#0F172A", fontSize:16, fontWeight:"800" },
+  pieceDetailMeta:{ color:"#1E293B", fontSize:12, marginTop:2 },
+  pieceDetailClose:{ width:30, height:30, borderRadius:15, backgroundColor:"#CBD5F5", alignItems:"center", justifyContent:"center" },
+  pieceDetailScroll:{ maxHeight:220 },
+  pieceDetailLabel:{ color:"#0F172A", fontSize:12, fontWeight:"700", textTransform:"uppercase", letterSpacing:0.6 },
+  pieceDetailDescription:{ color:"#1E293B", fontSize:14, lineHeight:22, marginTop:6 },
 });

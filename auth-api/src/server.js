@@ -269,12 +269,108 @@ app.get("/user/operacoes", requireAuth, async (req, res) => {
   catch(e){ console.error("Erro /user/operacoes:", e); res.status(500).json({ error:"Erro interno." }); }
 });
 
+app.get("/user/lista-pecas", requireAuth, async (req, res) => {
+  const ordem = String(req.query.ordem || req.query.op || req.query.valor || "").trim();
+  if (!ordem) return res.status(400).json({ error: "Informe a ordem de produção." });
+
+  const sql = `
+    WITH fichas AS (
+      SELECT DISTINCT NULLIF(BTRIM(ficha_tecnica_identificacao::text), '') AS ficha_tecnica_identificacao
+        FROM public.historico_op_iapp
+       WHERE lote_antecipado IS NOT NULL
+         AND lote_antecipado::text = $1
+         AND ficha_tecnica_identificacao IS NOT NULL
+    )
+    SELECT
+      hei.identificacao_da_ficha_tecnica,
+      NULLIF(BTRIM(hei.descricao_da_operacao::text), '') AS descricao_da_operacao,
+      NULLIF(BTRIM(hei.identificacao_do_produto::text), '') AS identificacao_do_produto,
+      NULLIF(BTRIM(hei.descricao_do_produto::text), '') AS descricao_do_produto,
+      NULLIF(BTRIM(hei.identificacao_do_produto_consumido::text), '') AS identificacao_do_produto_consumido,
+      NULLIF(BTRIM(hei.descricao_do_produto_consumido::text), '') AS descricao_do_produto_consumido,
+      hei.quantidade_prevista_de_consumo
+      FROM public.historico_estrutura_iapp hei
+      JOIN fichas f ON f.ficha_tecnica_identificacao = NULLIF(BTRIM(hei.identificacao_da_ficha_tecnica::text), '')
+     WHERE hei.identificacao_do_produto_consumido IS NOT NULL
+       AND COALESCE(hei.identificacao_do_produto_consumido::text, '') <> ''
+       AND NOT (
+         upper(COALESCE(hei.identificacao_do_produto_consumido::text, '')) LIKE ANY (
+           ARRAY['06.MP%', '02.MP%', '07.MP%', '08.EM%', '01.MP%']
+         )
+       )
+     ORDER BY
+       hei.identificacao_da_ficha_tecnica,
+       NULLIF(BTRIM(hei.descricao_da_operacao::text), ''),
+       NULLIF(BTRIM(hei.identificacao_do_produto_consumido::text), '');
+  `;
+
+  try {
+    const { rows } = await pool.query(sql, [ordem]);
+
+    if (rows.length === 0) {
+      return res.json({ ordem, fichas: [] });
+    }
+
+    const fichasMap = new Map();
+
+    for (const row of rows) {
+      const fichaId = row.identificacao_da_ficha_tecnica || "DESCONHECIDA";
+      if (!fichasMap.has(fichaId)) {
+        fichasMap.set(fichaId, {
+          identificacao_da_ficha_tecnica: fichaId,
+          identificacao: {
+            identificacao_do_produto: row.identificacao_do_produto || null,
+            descricao_do_produto: row.descricao_do_produto || null,
+          },
+          operacoes: new Map(),
+        });
+      }
+
+      const ficha = fichasMap.get(fichaId);
+      if (!ficha.identificacao.identificacao_do_produto && row.identificacao_do_produto) {
+        ficha.identificacao.identificacao_do_produto = row.identificacao_do_produto;
+      }
+      if (!ficha.identificacao.descricao_do_produto && row.descricao_do_produto) {
+        ficha.identificacao.descricao_do_produto = row.descricao_do_produto;
+      }
+
+      const operacaoKey = row.descricao_da_operacao || "Sem descrição";
+      if (!ficha.operacoes.has(operacaoKey)) {
+        ficha.operacoes.set(operacaoKey, []);
+      }
+
+      ficha.operacoes.get(operacaoKey).push({
+        identificacao_do_produto_consumido: row.identificacao_do_produto_consumido,
+        descricao_do_produto_consumido: row.descricao_do_produto_consumido,
+        quantidade_prevista_de_consumo:
+          row.quantidade_prevista_de_consumo !== null && row.quantidade_prevista_de_consumo !== undefined
+            ? Number(row.quantidade_prevista_de_consumo)
+            : null,
+      });
+    }
+
+    const fichas = Array.from(fichasMap.values()).map((ficha) => ({
+      identificacao_da_ficha_tecnica: ficha.identificacao_da_ficha_tecnica,
+      identificacao: ficha.identificacao,
+      operacoes: Array.from(ficha.operacoes.entries()).map(([descricao_da_operacao, itens]) => ({
+        descricao_da_operacao,
+        itens,
+      })),
+    }));
+
+    return res.json({ ordem, fichas });
+  } catch (e) {
+    console.error("Erro /user/lista-pecas:", e);
+    return res.status(500).json({ error: "Erro interno." });
+  }
+});
+
 app.get("/user/busca-codigo", requireAuth, async (req, res) => {
   const term = String(req.query.term || "").trim();
   if (!term) return res.status(400).json({ error: "Informe um termo de busca." });
 
-  const like = `%${term}%`;
-  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+    const like = `%${term}%`;
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
   const sql = `
     WITH resultados AS (
       SELECT 'historico_op_glide'::text AS tabela,
