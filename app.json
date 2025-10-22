@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "icon": "./assets/fromtherm-icon.png",
+  "icon": "./assets/icon.png",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -22,11 +22,10 @@
       "package": "com.qualidafromtherm2.loginapp",
       "versionCode": 2,
       "permissions": [
-        "INTERNET",
         "INTERNET"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/fromtherm-adaptive-foreground.png",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
