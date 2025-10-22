@@ -3,22 +3,32 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Modal, TouchableOpacity } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
-import { apiLogin, apiForgotPassword, apiVerifyResetCode, apiResetPassword } from "../services/api";
+
+import { apiLogin, apiForgotPassword, apiVerifyResetCode, apiResetPassword, apiCompleteRegistration } from "../services/api";
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function LoginScreen({ onLoggedIn }) {
   const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
-  const [isResetFlow, setIsResetFlow] = useState(false);
-  const [newSenha, setNewSenha] = useState("");
-  const [confirmSenha, setConfirmSenha] = useState("");
   const [segura, setSegura] = useState(true);
   const [loading, setLoading] = useState(false);
   const [erro, setErro] = useState("");
   const refSenha = useRef(null);
-  const [forgotVisible, setForgotVisible] = useState(false);
-  const [forgotInput, setForgotInput] = useState("");
+
+  const [resetStage, setResetStage] = useState(null); // null | 'request' | 'verify' | 'reset'
+  const [resetIdentifier, setResetIdentifier] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [resetNewPassword, setResetNewPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
+
+  const [completeVisible, setCompleteVisible] = useState(false);
+  const [completeUsername, setCompleteUsername] = useState("");
+  const [completePassword, setCompletePassword] = useState("");
+  const [completeNewPassword, setCompleteNewPassword] = useState("");
+  const [completeEmail, setCompleteEmail] = useState("");
+
+  // Removido Google Sign-In
 
   const usuarioValido = useMemo(() => {
     const v = usuario.trim();
@@ -31,45 +41,123 @@ export default function LoginScreen({ onLoggedIn }) {
   async function submit(){
     setErro("");
     if(!usuarioValido) return setErro("Informe usuário ou e-mail válido.");
-    // Se estamos no fluxo de reset (já verificado código), então trocar senha
-    if(isResetFlow){
-      if(newSenha.length < 6) return setErro('Nova senha deve ter 6+ caracteres.');
-      if(newSenha !== confirmSenha) return setErro('Senhas não conferem.');
-      try{
-        setLoading(true);
-        await apiResetPassword(usuario.trim(), senha.trim(), newSenha);
-        Alert.alert('Sucesso', 'Senha redefinida. Use a nova senha para entrar.');
-        // resetar estados e focar login
-        setIsResetFlow(false); setNewSenha(''); setConfirmSenha(''); setSenha('');
-      }catch(e){ Alert.alert('Erro', e.message || 'Falha ao resetar senha'); }
-      finally{ setLoading(false); }
-      return;
-    }
-    // fluxo normal de login
     if(!senhaValida) return setErro("Senha deve ter 6+ caracteres.");
     try{
       setLoading(true);
-      const { token, user } = await apiLogin(usuario.trim(), senha);
-      onLoggedIn(token, user);
+      const result = await apiLogin(usuario.trim(), senha);
+      if (result?.needsEmail) {
+        setCompleteUsername(usuario.trim());
+        setCompletePassword(senha);
+        setCompleteNewPassword('');
+        setCompleteEmail('');
+        setCompleteVisible(true);
+        Alert.alert('Completar cadastro', 'Informe o e-mail e defina uma nova senha para ativar seu acesso.');
+        return;
+      }
+      const { token, user } = result || {};
+      if (token && user) {
+        onLoggedIn(token, user);
+        return;
+      }
+      throw new Error('Resposta inesperada.');
     }catch(e){
       const msg = e.message || "Falha no login";
       setErro(msg); Alert.alert("Erro", msg);
     }finally{ setLoading(false); }
   }
 
-  // Função para verificar se o campo senha contém um código de 6 dígitos e iniciar verificação
-  async function tryVerifyCode(val){
-    const code = (val || '').trim();
-    if(!/^[0-9]{6}$/.test(code)) return; // não é código
-    if(!usuarioValido) { Alert.alert('Erro', 'Informe usuário válido antes do código.'); return; }
+  function openReset(stage){
+    const identifier = usuario.trim() || resetIdentifier;
+    setResetIdentifier(identifier);
+    setResetStage(stage);
+    setResetCode('');
+    setResetNewPassword('');
+    setResetConfirmPassword('');
+  }
+
+  function closeReset(){
+    setResetStage(null);
+    setResetIdentifier('');
+    setResetCode('');
+    setResetNewPassword('');
+    setResetConfirmPassword('');
+    setLoading(false);
+  }
+
+  async function handleSendResetCode(){
+    const identifier = (resetIdentifier || '').trim();
+    if(!identifier) { Alert.alert('Erro', 'Informe usuário ou e-mail.'); return; }
     try{
       setLoading(true);
-      await apiVerifyResetCode(usuario.trim(), code);
-      // código válido -> entrar no fluxo de reset: senha atual passa a ser o código e exibimos campos de nova senha
-      setIsResetFlow(true);
-      Alert.alert('Código válido', 'Digite a nova senha e confirme para concluir.');
-    }catch(e){ Alert.alert('Código inválido', e.message || 'Código inválido ou expirado.'); }
-    finally{ setLoading(false); }
+      await apiForgotPassword(identifier);
+      setResetStage('verify');
+      Alert.alert('Solicitação enviada', 'Se o usuário existir, você receberá um código por e-mail.');
+    }catch(e){
+      Alert.alert('Erro', e.message || 'Falha ao solicitar código.');
+    }finally{
+      setLoading(false);
+    }
+  }
+
+  async function handleValidateResetCode(){
+    const identifier = (resetIdentifier || '').trim();
+    const code = (resetCode || '').trim();
+    if(!identifier) return Alert.alert('Erro', 'Informe usuário ou e-mail.');
+    if(!/^[0-9]{6}$/.test(code)) return Alert.alert('Erro', 'Código deve ter 6 dígitos.');
+    try{
+      setLoading(true);
+      await apiVerifyResetCode(identifier, code);
+      setResetStage('reset');
+      Alert.alert('Código válido', 'Informe a nova senha para concluir.');
+    }catch(e){
+      Alert.alert('Código inválido', e.message || 'Código inválido ou expirado.');
+    }finally{
+      setLoading(false);
+    }
+  }
+
+  async function handleChangePassword(){
+    const identifier = (resetIdentifier || '').trim();
+    const code = (resetCode || '').trim();
+    if(!identifier || !code){
+      Alert.alert('Erro', 'Informe usuário/e-mail e código.');
+      return;
+    }
+    if(resetNewPassword.length < 6) return Alert.alert('Erro', 'Nova senha deve ter 6+ caracteres.');
+    if(resetNewPassword !== resetConfirmPassword) return Alert.alert('Erro', 'Senhas não conferem.');
+    try{
+      setLoading(true);
+      await apiResetPassword(identifier, code, resetNewPassword);
+      closeReset();
+      Alert.alert('Senha alterada', 'Senha alterada com sucesso. Faça login com a nova senha.');
+    }catch(e){
+      Alert.alert('Erro', e.message || 'Falha ao alterar senha.');
+    }finally{
+      setLoading(false);
+    }
+  }
+
+  async function handleCompleteRegistration(){
+    const username = (completeUsername || '').trim();
+    const currentPassword = completePassword;
+    const newPassword = completeNewPassword;
+    const email = (completeEmail || '').trim();
+
+    if(!username || !currentPassword) return Alert.alert('Erro', 'Informe usuário e senha atual.');
+    if(!emailRegex.test(email)) return Alert.alert('Erro', 'Informe um e-mail válido.');
+    if(newPassword.length < 6) return Alert.alert('Erro', 'Nova senha deve ter 6+ caracteres.');
+    if(newPassword === currentPassword) return Alert.alert('Erro', 'Use uma nova senha diferente da atual.');
+
+    try{
+      setLoading(true);
+      await apiCompleteRegistration({ username, password: currentPassword, newPassword, email });
+      setCompleteVisible(false);
+      Alert.alert('Cadastro completo', 'Senha atualizada e e-mail cadastrado. Faça login novamente.');
+    }catch(e){
+      Alert.alert('Erro', e.message || 'Falha ao completar cadastro.');
+    }finally{
+      setLoading(false);
+    }
   }
 
   return (
@@ -100,42 +188,17 @@ export default function LoginScreen({ onLoggedIn }) {
             <Text style={styles.label}>Senha</Text>
             <View style={styles.inputRow}>
               <Ionicons name="key" size={18} color="#6B7280" style={styles.leftIcon}/>
-              {!isResetFlow ? (
-                <TextInput ref={refSenha} placeholder="••••••••" placeholderTextColor="#9CA3AF"
-                  value={senha} onChangeText={(v)=>{ setSenha(v); tryVerifyCode(v); }} secureTextEntry={segura} style={styles.input}
-                  returnKeyType="go" onSubmitEditing={submit}/>
-              ) : (
-                <TextInput placeholder="Código recebido (usado)" placeholderTextColor="#9CA3AF"
-                  value={senha} editable={false} style={styles.input} />
-              )}
+              <TextInput ref={refSenha} placeholder="••••••••" placeholderTextColor="#9CA3AF"
+                value={senha} onChangeText={setSenha} secureTextEntry={segura} style={styles.input}
+                returnKeyType="go" onSubmitEditing={submit}/>
               <Pressable onPress={()=>setSegura(s=>!s)} style={styles.rightIcon}>
                 <Ionicons name={segura ? "eye-off" : "eye"} size={18} color="#6B7280" />
               </Pressable>
             </View>
           </View>
 
-          {isResetFlow && (
-            <>
-              <View style={styles.field}>
-                <Text style={styles.label}>Nova senha</Text>
-                <View style={styles.inputRow}>
-                  <Ionicons name="key" size={18} color="#6B7280" style={styles.leftIcon}/>
-                  <TextInput placeholder="Nova senha" placeholderTextColor="#9CA3AF"
-                    value={newSenha} onChangeText={setNewSenha} secureTextEntry style={styles.input} />
-                </View>
-              </View>
-              <View style={styles.field}>
-                <Text style={styles.label}>Repetir nova senha</Text>
-                <View style={styles.inputRow}>
-                  <Ionicons name="key" size={18} color="#6B7280" style={styles.leftIcon}/>
-                  <TextInput placeholder="Repita a nova senha" placeholderTextColor="#9CA3AF"
-                    value={confirmSenha} onChangeText={setConfirmSenha} secureTextEntry style={styles.input} />
-                </View>
-              </View>
-            </>
-          )}
-
           {erro ? <Text style={styles.error}>{erro}</Text> : null}
+
 
           <Pressable onPress={submit} disabled={!podeEnviar}
             style={({pressed})=>[styles.button, !podeEnviar && styles.buttonDisabled, pressed && podeEnviar && styles.buttonPressed]}>
@@ -143,53 +206,104 @@ export default function LoginScreen({ onLoggedIn }) {
           </Pressable>
 
           <View style={{flexDirection:'row', justifyContent:'space-between', marginTop:12}}>
-            <Pressable onPress={async ()=>{
-                // web: usar prompt nativo quando disponível
-                if (Platform.OS === 'web' && typeof window !== 'undefined' && window.prompt) {
-                  const val = window.prompt('Informe seu e-mail ou usuário para redefinir a senha:');
-                  if (!val) return;
-                  try{ setLoading(true); await apiForgotPassword(val.trim()); Alert.alert('Solicitação enviada', 'Se o e-mail/usuário existir, você receberá instruções por e-mail.'); }
-                  catch(e){ Alert.alert('Erro', e.message || 'Falha ao enviar solicitação'); }
-                  finally{ setLoading(false); }
-                  return;
-                }
-                // mobile: abrir modal para digitar
-                setForgotInput(usuario || '');
-                setForgotVisible(true);
-              }} style={{padding:8}}>
+            <Pressable onPress={() => openReset('request')} style={{padding:8}}>
               <Text style={{color:'#93C5FD', fontWeight:'600'}}>Esqueci a senha</Text>
             </Pressable>
 
-            <Pressable onPress={()=>{
-                // botão criado sem funcionalidade por enquanto
-                Alert.alert('Solicitação de cadastro', 'Funcionalidade não implementada ainda.');
-              }} style={{padding:8}}>
-              <Text style={{color:'#93C5FD', fontWeight:'600'}}>Solicitação de cadastro</Text>
+            <Pressable onPress={() => openReset('verify')} style={{padding:8}}>
+              <Text style={{color:'#93C5FD', fontWeight:'600'}}>Inserir código de verificação</Text>
             </Pressable>
           </View>
 
           <Text style={styles.hint}>* Use seu username do sistema e a senha.</Text>
         </View>
       </KeyboardAvoidingView>
-      <Modal visible={forgotVisible} animationType="slide" transparent>
+      {/* Modal fluxo de recuperação */}
+      <Modal visible={Boolean(resetStage)} animationType="slide" transparent>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={{color:'#F9FAFB', fontWeight:'700', marginBottom:8}}>Redefinir senha</Text>
-            <Text style={{color:'#9CA3AF', marginBottom:12}}>Informe seu e-mail ou usuário</Text>
-            <TextInput autoCapitalize="none" autoCorrect={false} placeholder="usuário ou e-mail" placeholderTextColor="#9CA3AF"
-              value={forgotInput} onChangeText={setForgotInput} style={styles.modalInput} />
+            {resetStage === 'request' && (
+              <>
+                <Text style={{color:'#F9FAFB', fontWeight:'700', marginBottom:8}}>Enviar código de verificação</Text>
+                <Text style={{color:'#9CA3AF', marginBottom:12}}>Informe seu usuário ou e-mail cadastrado. Enviaremos um código para redefinição.</Text>
+                <TextInput autoCapitalize="none" autoCorrect={false} placeholder="usuário ou e-mail" placeholderTextColor="#9CA3AF"
+                  value={resetIdentifier} onChangeText={setResetIdentifier} style={styles.modalInput} />
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity onPress={closeReset} style={styles.modalButton}>
+                    <Text style={styles.modalButtonText}>Cancelar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleSendResetCode} style={[styles.modalButton, {backgroundColor:'#2563EB'}]}>
+                    {loading ? <ActivityIndicator color="#fff"/> : <Text style={[styles.modalButtonText, {color:'#fff'}]}>Enviar código</Text>}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+
+            {resetStage === 'verify' && (
+              <>
+                <Text style={{color:'#F9FAFB', fontWeight:'700', marginBottom:8}}>Validar código</Text>
+                <Text style={{color:'#9CA3AF', marginBottom:12}}>Informe o usuário/e-mail e o código recebido.</Text>
+                <TextInput autoCapitalize="none" autoCorrect={false} placeholder="usuário ou e-mail" placeholderTextColor="#9CA3AF"
+                  value={resetIdentifier} onChangeText={setResetIdentifier} style={styles.modalInput} />
+                <TextInput placeholder="código de 6 dígitos" placeholderTextColor="#9CA3AF"
+                  value={resetCode} onChangeText={setResetCode} style={styles.modalInput} keyboardType="numeric" maxLength={6} />
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity onPress={closeReset} style={styles.modalButton}>
+                    <Text style={styles.modalButtonText}>Cancelar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleValidateResetCode} style={[styles.modalButton, {backgroundColor:'#2563EB'}]}>
+                    {loading ? <ActivityIndicator color="#fff"/> : <Text style={[styles.modalButtonText, {color:'#fff'}]}>Validar código</Text>}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+
+            {resetStage === 'reset' && (
+              <>
+                <Text style={{color:'#F9FAFB', fontWeight:'700', marginBottom:8}}>Definir nova senha</Text>
+                <Text style={{color:'#9CA3AF', marginBottom:12}}>Digite a nova senha para concluir a recuperação.</Text>
+                <TextInput autoCapitalize="none" autoCorrect={false} placeholder="usuário ou e-mail" placeholderTextColor="#9CA3AF"
+                  value={resetIdentifier} onChangeText={setResetIdentifier} style={styles.modalInput} />
+                <TextInput placeholder="código de 6 dígitos" placeholderTextColor="#9CA3AF"
+                  value={resetCode} onChangeText={setResetCode} style={styles.modalInput} keyboardType="numeric" maxLength={6} />
+                <TextInput placeholder="nova senha" placeholderTextColor="#9CA3AF"
+                  value={resetNewPassword} onChangeText={setResetNewPassword} secureTextEntry style={styles.modalInput} />
+                <TextInput placeholder="repita a nova senha" placeholderTextColor="#9CA3AF"
+                  value={resetConfirmPassword} onChangeText={setResetConfirmPassword} secureTextEntry style={styles.modalInput} />
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity onPress={closeReset} style={styles.modalButton}>
+                    <Text style={styles.modalButtonText}>Cancelar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleChangePassword} style={[styles.modalButton, {backgroundColor:'#2563EB'}]}>
+                    {loading ? <ActivityIndicator color="#fff"/> : <Text style={[styles.modalButtonText, {color:'#fff'}]}>Alterar senha</Text>}
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal completar cadastro (usuário sem e-mail) */}
+      <Modal visible={completeVisible} animationType="slide" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={{color:'#F9FAFB', fontWeight:'700', marginBottom:8}}>Completar cadastro</Text>
+            <Text style={{color:'#9CA3AF', marginBottom:12}}>Informe os dados para finalizar o cadastro.</Text>
+            <TextInput autoCapitalize="none" autoCorrect={false} placeholder="usuário" placeholderTextColor="#9CA3AF"
+              value={completeUsername} onChangeText={setCompleteUsername} style={styles.modalInput} />
+            <TextInput placeholder="senha atual" placeholderTextColor="#9CA3AF" secureTextEntry
+              value={completePassword} onChangeText={setCompletePassword} style={styles.modalInput} />
+            <TextInput placeholder="nova senha" placeholderTextColor="#9CA3AF" secureTextEntry
+              value={completeNewPassword} onChangeText={setCompleteNewPassword} style={styles.modalInput} />
+            <TextInput placeholder="e-mail" placeholderTextColor="#9CA3AF" keyboardType="email-address"
+              autoCapitalize="none" value={completeEmail} onChangeText={setCompleteEmail} style={styles.modalInput} />
             <View style={styles.modalButtons}>
-              <TouchableOpacity onPress={()=>{ setForgotVisible(false); setForgotInput(''); }} style={styles.modalButton}>
+              <TouchableOpacity onPress={()=>{ setCompleteVisible(false); setCompletePassword(''); setCompleteNewPassword(''); setCompleteEmail(''); }} style={styles.modalButton}>
                 <Text style={styles.modalButtonText}>Cancelar</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={async ()=>{
-                  const val = (forgotInput||'').trim();
-                  if (!val) return Alert.alert('Erro', 'Informe um e-mail ou usuário.');
-                  try{ setLoading(true); await apiForgotPassword(val); setForgotVisible(false); setForgotInput(''); Alert.alert('Solicitação enviada', 'Se o e-mail/usuário existir, você receberá instruções por e-mail.'); }
-                  catch(e){ Alert.alert('Erro', e.message || 'Falha ao enviar solicitação'); }
-                  finally{ setLoading(false); }
-                }} style={[styles.modalButton, {backgroundColor:'#2563EB'}]}>
-                {loading ? <ActivityIndicator color="#fff"/> : <Text style={[styles.modalButtonText, {color:'#fff'}]}>Enviar</Text>}
+              <TouchableOpacity onPress={handleCompleteRegistration} style={[styles.modalButton, {backgroundColor:'#2563EB'}]}>
+                {loading ? <ActivityIndicator color="#fff"/> : <Text style={[styles.modalButtonText, {color:'#fff'}]}>Salvar</Text>}
               </TouchableOpacity>
             </View>
           </View>

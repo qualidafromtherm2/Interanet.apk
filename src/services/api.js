@@ -1,9 +1,16 @@
+export async function apiLoginGoogle(id_token) {
+  return tryEndpoints('/auth/google-login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id_token }),
+  });
+}
 import { Platform } from "react-native";
 import { getToken } from "../lib/storage";
 
 const LOCAL_BASE = Platform.OS === "web" ? "http://localhost:3001" : "http://192.168.1.16:3001";
 const RENDER_URL = "https://interanet-apk.onrender.com";
-const CANDIDATES = [RENDER_URL]; // só HTTPS no APK
+const CANDIDATES = [LOCAL_BASE, RENDER_URL]; // tenta local primeiro, depois produção
 const TIMEOUT_MS = 8000;
 
 
@@ -17,11 +24,20 @@ async function tryEndpoints(path, init) {
   let lastErr = "Conexão falhou";
   for (const base of CANDIDATES) {
     try {
+      console.log(`[tryEndpoints] tentando ${base}${path}`);
       const res = await fetchWithTimeout(`${base}${path}`, init);
       const json = await res.json().catch(() => ({}));
-      if (res.ok) return json;
-      lastErr = json?.error || `HTTP ${res.status}`;
+      if (res.ok) {
+        console.log(`[tryEndpoints] sucesso em ${base}${path}`);
+        return json;
+      }
+      const err = new Error(json?.error || `HTTP ${res.status}`);
+      err.status = res.status;
+      err.data = json;
+      throw err;
     } catch (e) {
+      if (e?.status) throw e;
+      console.warn(`[tryEndpoints] falha em ${base}${path}:`, e?.message || e);
       lastErr = e.name === "AbortError" ? "Tempo esgotado" : (e.message || String(e));
     }
   }
@@ -60,6 +76,14 @@ export async function apiResetPassword(username, code, newPassword) {
   });
 }
 
+export async function apiCompleteRegistration(payload) {
+  return tryEndpoints('/auth/complete-registration', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function apiGetProfile() {
   const token = await getToken();
   return tryEndpoints("/user/profile", {
@@ -72,4 +96,18 @@ export async function apiGetOperacoes() {
   return tryEndpoints("/user/operacoes", {
     headers: { Authorization: `Bearer ${token}` },
   });
+}
+
+export async function apiBuscarCodigo(term, limit) {
+  const token = await getToken();
+  const query = [];
+  query.push(`term=${encodeURIComponent(term ?? "")}`);
+  if (limit) query.push(`limit=${encodeURIComponent(String(limit))}`);
+  const path = `/user/busca-codigo?${query.join("&")}`;
+  console.log("[apiBuscarCodigo] ▶️ buscando", { term, limit, path });
+  const data = await tryEndpoints(path, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  console.log("[apiBuscarCodigo] ✅ retorno", data);
+  return data;
 }

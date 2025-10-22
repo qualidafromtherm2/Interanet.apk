@@ -1,8 +1,64 @@
 import React, { useEffect, useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator, Alert, ScrollView } from "react-native";
+import { View, Text, Pressable, StyleSheet, Modal, ActivityIndicator, Alert, ScrollView, TextInput, Image } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { apiGetProfile, apiGetOperacoes } from "../services/api";
+import { apiGetProfile, apiGetOperacoes, apiBuscarCodigo } from "../services/api";
+
+const TABLE_LABELS = {
+  historico_op_glide: "Histórico OP Glide",
+  historico_op_glide_f_escopo: "Histórico OP Glide F Escopo",
+  historico_pedido_originalis: "Histórico Pedido Originalis",
+};
+
+const COLUMN_LABELS = {
+  pedido: "Pedido",
+  ordem_de_producao: "Ordem de Produção",
+  nota_fiscal: "Nota Fiscal",
+};
+
+const TABLE_FIELDS = {
+  historico_op_glide: [
+    { key: "controlador", label: "Controlador" },
+    { key: "modelo", label: "Modelo" },
+    { key: "ordem_de_producao", label: "Ordem de Produção" },
+    { key: "pedido", label: "Pedido" },
+    { key: "primeiro_teste_tipo_de_gas", label: "1º Teste (Tipo de Gás)" },
+  ],
+  historico_op_glide_f_escopo: [
+    { key: "controlador", label: "Controlador" },
+    { key: "modelo", label: "Modelo" },
+    { key: "ordem_de_producao", label: "Ordem de Produção" },
+    { key: "pedido", label: "Pedido" },
+    { key: "primeiro_teste_tipo_de_gas", label: "1º Teste (Tipo de Gás)" },
+  ],
+  historico_pedido_originalis: [
+    { key: "nota_fiscal", label: "Nota Fiscal" },
+    { key: "ordem_de_producao", label: "Ordem de Produção" },
+    { key: "pedido", label: "Pedido" },
+    { key: "cliente", label: "Cliente" },
+    { key: "control", label: "Control" },
+    { key: "data_entrega", label: "Data de Entrega" },
+    { key: "estado", label: "Estado" },
+    { key: "modelo", label: "Modelo" },
+    { key: "opcional", label: "Opcional" },
+  ],
+};
+
+function formatFieldValue(key, value) {
+  if (value === null || value === undefined) return null;
+  let normalized = value;
+  if (typeof normalized === "string") {
+    normalized = normalized.trim();
+    if (!normalized) return null;
+  }
+  if (key === "data_entrega") {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleDateString("pt-BR");
+    }
+  }
+  return String(normalized);
+}
 
 export default function HomeScreen({ onLogout }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -12,6 +68,10 @@ export default function HomeScreen({ onLogout }) {
 
   const [opsLoading, setOpsLoading] = useState(true);
   const [ops, setOps] = useState([]);
+  const [codigoManual, setCodigoManual] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
+  const [ultimaBusca, setUltimaBusca] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -37,7 +97,37 @@ export default function HomeScreen({ onLogout }) {
   }
   function handleProducao(){ setMenuOpen(false); Alert.alert("Produção","Tela de Produção em construção."); }
   function handleSair(){ setMenuOpen(false); onLogout(); }
-  function onPressOperacao(op){ Alert.alert("Operação", op); }
+  async function executarBusca(valor){
+    try {
+      console.log("[HomeScreen] executando busca", { valor });
+      setSearchLoading(true);
+      setUltimaBusca(valor);
+      setSearchResults([]);
+      const data = await apiBuscarCodigo(valor);
+      console.log("[HomeScreen] resposta da API", data);
+      const list = Array.isArray(data?.results) ? data.results : [];
+      console.log("[HomeScreen] resultados normalizados", list);
+      setSearchResults(list);
+      if (!list.length) {
+        Alert.alert("Sem resultados", "Nenhum registro encontrado para o termo informado.");
+      }
+    } catch (e) {
+      console.error("[HomeScreen] erro ao buscar", e);
+      const message = e?.message || e?.data?.error || "Falha ao buscar registros.";
+      Alert.alert("Erro", message);
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  async function handleSubmitCodigo(){
+    const valor = (codigoManual || "").trim();
+    if (!valor) {
+      Alert.alert("Atenção", "Informe um código (OP, NS ou NF).");
+      return;
+    }
+    await executarBusca(valor);
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -69,19 +159,110 @@ export default function HomeScreen({ onLogout }) {
       )}
 
       <View style={styles.body}>
-        {opsLoading ? (
-          <View style={styles.center}><ActivityIndicator /><Text style={styles.muted}>Carregando operações…</Text></View>
-        ) : ops.length === 0 ? (
-          <View style={styles.center}><Text style={styles.muted}>Sem operações atribuídas.</Text></View>
-        ) : (
-          <ScrollView contentContainerStyle={styles.listContainer}>
-            {ops.map(op => (
-              <Pressable key={String(op)} style={styles.opBtn} onPress={()=>onPressOperacao(op)}>
-                <Text style={styles.opTxt}>{op}</Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-        )}
+        <View style={styles.formCard}>
+          <Text style={styles.formTitle}>Inserir OP / NS / NF</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Digite o código"
+            placeholderTextColor="#9CA3AF"
+            value={codigoManual}
+            onChangeText={setCodigoManual}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            returnKeyType="done"
+            onSubmitEditing={handleSubmitCodigo}
+          />
+          <Pressable style={[styles.submitBtn, searchLoading && styles.submitBtnDisabled]} onPress={handleSubmitCodigo} disabled={searchLoading}>
+            <Text style={styles.submitTxt}>{searchLoading ? "Buscando..." : "Buscar"}</Text>
+          </Pressable>
+
+          <View style={styles.resultsSection}>
+            <Text style={styles.sectionTitle}>Resultados da busca</Text>
+            {searchLoading ? (
+              <View style={styles.centerInside}><ActivityIndicator /><Text style={styles.muted}>Buscando registros…</Text></View>
+            ) : searchResults.length > 0 ? (
+              <ScrollView style={styles.resultsScroll} contentContainerStyle={styles.resultsContainer} nestedScrollEnabled>
+                {searchResults.map((item, idx) => {
+                  const tableKey = item?.tabela;
+                  const columnKey = item?.coluna;
+                  const tableLabel = TABLE_LABELS[tableKey] || (tableKey ? String(tableKey) : "Tabela desconhecida");
+                  const columnLabel = COLUMN_LABELS[columnKey] || (columnKey ? String(columnKey) : "Campo");
+                  let detalhes = item?.detalhes || {};
+                  if (typeof detalhes === "string") {
+                    try {
+                      detalhes = JSON.parse(detalhes);
+                    } catch (e) {
+                      detalhes = {};
+                    }
+                  }
+                  const fieldConfig = TABLE_FIELDS[tableKey] || [];
+                  const detailEntries = fieldConfig
+                    .map(({ key, label }) => {
+                      const formatted = formatFieldValue(key, detalhes?.[key]);
+                      if (formatted === null) return null;
+                      return { key, label, value: formatted };
+                    })
+                    .filter(Boolean);
+
+                  return (
+                    <View key={`${item.tabela}-${item.coluna}-${item.valor}-${idx}`} style={styles.resultCard}>
+                      <Text style={styles.resultValor}>{item.valor}</Text>
+                      <Text style={styles.resultMeta}>{columnLabel} • {tableLabel}</Text>
+                      {item?.imagem_url ? (
+                        <Image
+                          source={{ uri: item.imagem_url }}
+                          style={styles.resultImage}
+                          resizeMode="contain"
+                        />
+                      ) : null}
+                      {detailEntries.length > 0 ? (
+                        <View style={styles.detailList}>
+                          {detailEntries.map(({ key, label, value }) => (
+                            <View key={key} style={styles.detailRow}>
+                              <Text style={styles.detailLabel}>{label}</Text>
+                              <Text style={styles.detailValue}>{value}</Text>
+                            </View>
+                          ))}
+                        </View>
+                      ) : (
+                        <Text style={styles.detailEmpty}>Sem detalhes adicionais.</Text>
+                      )}
+                    </View>
+                  );
+                })}
+              </ScrollView>
+            ) : ultimaBusca ? (
+              <Text style={styles.resultEmpty}>Nenhum registro encontrado para "{ultimaBusca}".</Text>
+            ) : (
+              <Text style={styles.resultHint}>Digite um código para buscar nos históricos.</Text>
+            )}
+          </View>
+
+          {opsLoading ? (
+            <View style={styles.centerInside}><ActivityIndicator /><Text style={styles.muted}>Carregando operações…</Text></View>
+          ) : ops.length > 0 ? (
+            <View style={styles.sugestoesBox}>
+              <Text style={styles.sectionTitle}>Operações atribuídas</Text>
+              <ScrollView contentContainerStyle={styles.tagsContainer} horizontal={false} nestedScrollEnabled>
+                {ops.map(op => (
+                  <Pressable
+                    key={String(op)}
+                    style={({ pressed }) => [styles.tag, pressed && styles.tagPressed]}
+                    onPress={() => {
+                      const valor = String(op || "").trim();
+                      setCodigoManual(valor);
+                      if (valor) executarBusca(valor);
+                    }}
+                  >
+                    <Text style={styles.tagTxt}>{op}</Text>
+                  </Pressable>
+                ))}
+              </ScrollView>
+            </View>
+          ) : (
+            <Text style={[styles.muted, { marginTop:12 }]}>Sem operações atribuídas.</Text>
+          )}
+        </View>
       </View>
 
       <Modal visible={perfilOpen} transparent animationType="fade" onRequestClose={()=>setPerfilOpen(false)}>
@@ -118,9 +299,33 @@ const styles = StyleSheet.create({
   body:{ flex:1, padding:16 },
   center:{ flex:1, alignItems:"center", justifyContent:"center" },
   muted:{ color:"#9CA3AF" },
-  listContainer:{ gap:10 },
-  opBtn:{ backgroundColor:"#2563EB", borderRadius:12, paddingVertical:14, paddingHorizontal:16, borderWidth:1, borderColor:"#1E40AF" },
-  opTxt:{ color:"#F9FAFB", fontWeight:"700", fontSize:16 },
+  formCard:{ backgroundColor:"#111827", borderRadius:16, padding:16, borderWidth:1, borderColor:"#1F2937", flex:1 },
+  formTitle:{ color:"#F9FAFB", fontSize:18, fontWeight:"700", marginBottom:12 },
+  input:{ borderWidth:1, borderColor:"#374151", backgroundColor:"#0B1220", borderRadius:12, paddingHorizontal:14, paddingVertical:12, color:"#F9FAFB", fontSize:16 },
+  submitBtn:{ marginTop:12, backgroundColor:"#2563EB", borderRadius:12, paddingVertical:14, alignItems:"center", borderWidth:1, borderColor:"#1E40AF" },
+  submitBtnDisabled:{ opacity:0.7 },
+  submitTxt:{ color:"#F9FAFB", fontWeight:"700", fontSize:16 },
+  resultsSection:{ marginTop:20, flex:1 },
+  sectionTitle:{ color:"#F9FAFB", fontWeight:"600", marginBottom:8, fontSize:16 },
+  resultsScroll:{ maxHeight:200, borderWidth:1, borderColor:"#1F2937", borderRadius:12, backgroundColor:"#0B1220" },
+  resultsContainer:{ padding:12, gap:12 },
+  resultCard:{ backgroundColor:"#111827", borderWidth:1, borderColor:"#1F2937", borderRadius:12, padding:12, gap:8 },
+  resultValor:{ color:"#F9FAFB", fontSize:16, fontWeight:"700" },
+  resultMeta:{ color:"#93C5FD", marginTop:4, fontSize:13 },
+  resultImage:{ width:"100%", height:160, borderRadius:12, backgroundColor:"#0B1220" },
+  detailList:{ gap:6 },
+  detailRow:{ flexDirection:"row", gap:6, alignItems:"flex-start" },
+  detailLabel:{ color:"#D1D5DB", fontWeight:"600", fontSize:13, minWidth:110 },
+  detailValue:{ color:"#F3F4F6", fontSize:13, flexShrink:1 },
+  detailEmpty:{ color:"#9CA3AF", fontSize:13 },
+  resultHint:{ color:"#9CA3AF" },
+  resultEmpty:{ color:"#FCD34D" },
+  centerInside:{ marginTop:16, alignItems:"center" },
+  sugestoesBox:{ marginTop:16, flex:1 },
+  tagsContainer:{ flexDirection:"row", flexWrap:"wrap", gap:8 },
+  tag:{ backgroundColor:"#1D4ED8", borderRadius:10, paddingVertical:6, paddingHorizontal:10, borderWidth:1, borderColor:"#1E40AF" },
+  tagPressed:{ opacity:0.8 },
+  tagTxt:{ color:"#E0F2FE", fontWeight:"600" },
   modalOverlay:{ ...StyleSheet.absoluteFillObject, backgroundColor:"rgba(0,0,0,0.45)" },
   modalCard:{ position:"absolute", left:20, right:20, top:"25%", backgroundColor:"#111827", borderWidth:1, borderColor:"#1F2937", borderRadius:16, padding:16 },
   modalTitle:{ color:"#F9FAFB", fontSize:18, fontWeight:"700", marginBottom:8 },
